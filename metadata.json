@@ -1,0 +1,6 @@
+{
+  "name": "Silent Browser",
+  "description": "Silent Browser - Multi-engine privacy and security browser by Silent Bot LLC with ad-blocking, fingerprint protection, virtual shielded IP, and cross-device encrypted sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
