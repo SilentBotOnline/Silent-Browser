@@ -1,0 +1,123 @@
+name: Build Windows Installers (x64 & x86)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "Release version (e.g., 1.0.1)"
+        required: true
+        default: "1.0.1"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-installers:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $ver = "${{ inputs.app_version }}".TrimStart("v")
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $ver = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $ver = "1.0.0-dev"
+          }
+          if ($ver -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            Write-Error "Invalid version format: $ver"
+            exit 1
+          }
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe not found at $iscc"
+            exit 1
+          }
+          "iscc=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Prepare x64 and x86 build staging folders
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ".\dist\win-x64", ".\dist\win-x86", ".\dist\release" | Out-Null
+
+          # Replace these copy steps with your actual x64 and x86 build outputs
+          # once your app build produces binaries for both architectures.
+          if (Test-Path ".\build\win-x64\*") {
+            Copy-Item ".\build\win-x64\*" -Destination ".\dist\win-x64" -Recurse -Force
+          } else {
+            "Silent Browser x64 placeholder payload" | Out-File ".\dist\win-x64\SilentBrowser.exe" -Encoding ascii
+          }
+
+          if (Test-Path ".\build\win-x86\*") {
+            Copy-Item ".\build\win-x86\*" -Destination ".\dist\win-x86" -Recurse -Force
+          } else {
+            "Silent Browser x86 placeholder payload" | Out-File ".\dist\win-x86\SilentBrowser.exe" -Encoding ascii
+          }
+
+      - name: Compile x64 installer with ISCC.exe
+        shell: pwsh
+        run: |
+          & "$env:iscc" `
+            "/DMyAppVersion=${{ steps.version.outputs.version }}" `
+            "/DTargetArch=x64" `
+            ".\installer\SilentBrowser.iss"
+
+      - name: Compile x86 installer with ISCC.exe
+        shell: pwsh
+        run: |
+          & "$env:iscc" `
+            "/DMyAppVersion=${{ steps.version.outputs.version }}" `
+            "/DTargetArch=x86" `
+            ".\installer\SilentBrowser.iss"
+
+      - name: Collect installers and generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          Get-ChildItem ".\dist\installer\*.exe" | Copy-Item -Destination ".\dist\release" -Force
+
+          $releaseDir = Resolve-Path ".\dist\release"
+          $sumsPath = Join-Path $releaseDir "SHA256SUMS.txt"
+          $lines = @()
+
+          Get-ChildItem -Path $releaseDir -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $lines += "$hash  $($_.Name)"
+          }
+
+          $lines | Set-Content -Path $sumsPath -Encoding ascii
+          Get-Content $sumsPath
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: silent-browser-windows-v${{ steps.version.outputs.version }}
+          path: |
+            dist/release/*.exe
+            dist/release/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release on tag or dispatch
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          name: Silent Browser v${{ steps.version.outputs.version }} (Windows x64 & x86)
+          files: |
+            dist/release/*.exe
+            dist/release/SHA256SUMS.txt
+          draft: false
+          prerelease: false
